@@ -1,0 +1,320 @@
+/* S1 - OPTIONS */
+
+options {
+    JAVA_UNICODE_ESCAPE = true;
+    IGNORE_CASE = true;
+    MULTI = true;
+    VISITOR = true;
+    NODE_DEFAULT_VOID=true;
+}
+
+/* S2 - USER CODE */
+
+PARSER_BEGIN(CcalParser)
+import java.io.*;
+import java.util.*;
+
+public class CcalParser {
+  //default scope
+  public static String scope = "global";
+  public static symboltable ST = new symboltable();
+
+  public static void main(String[] args){
+
+
+    CcalParser parser;
+    if(args.length == 0){
+      System.out.println("Reading from standard input..");
+      parser = new CcalParser(System.in);
+
+
+    } else if (args.length == 1){
+      System.out.println("Reading from file " + args[0] + "...");
+      try{
+        parser = new CcalParser(new java.io.FileInputStream(args[0]));
+      } catch(java.io.FileNotFoundException e){
+        System.err.println("File " + args[0] + " not found.");
+        return;
+      }
+
+    }
+
+    else {
+      System.out.println("CCAL parser: Usage is one of:");
+      System.out.println(" java CcalParser < inputfile");
+      System.out.println("OR");
+      System.out.println(" java CcalParser inputfile");
+      return;
+    }
+
+    try{
+      //AST
+      System.out.println("---AST---");
+      SimpleNode root = parser.program();
+      System.out.println("Abstract syntax tree:");
+      root.dump("");
+      System.out.println();
+
+      //Symboltable
+
+     System.out.println("---Symbol table---");
+     ST.printSymTable();
+
+     //SemanticCheck
+     System.out.println("---Semantic Check not passed will show here---");
+     SemanticCheckVisitor SC = new SemanticCheckVisitor();
+     root.jjtAccept(SC, ST);
+    }
+
+     catch (ParseException e){
+    System.out.println(e.getMessage());
+
+    System.out.println("There was a problem parsing this program");
+     }
+  }
+}
+
+PARSER_END(CcalParser)
+
+/* S3 - TOKEN DEFINITIONS */
+
+
+TOKEN_MGR_DECLS :
+{
+  static int comment_nest = 0;
+}
+
+SKIP : /*DEALING WITH WHITESPACES ETC.*/
+
+{
+  " "
+| "\t"
+| "\n"
+| "\r"
+|"\r\n"
+| "\f"
+}
+
+SKIP : //COMMENTS
+{
+
+  < "//" ([" "-"~"])* ("\n" |"\t"| "\r" | "\r\n") >
+  |"/*" { comment_nest++; } : IN_COMMENT
+}
+
+
+<IN_COMMENT> SKIP : // Dealing with nested comments
+{
+  "/*" { comment_nest++; }
+| "*/" { comment_nest--;
+               if (comment_nest == 0)
+               SwitchTo(DEFAULT);}
+| <~[]>
+}
+
+
+TOKEN : //keywords
+
+{
+ <VAR : "var">
+|<INT : "integer">
+|<CONST : "const">
+|<RET : "return">
+|<BOOL : "boolean">
+|<VOID : "void">
+|<MAIN : "main">
+|<IF : "if">
+|<ELSE : "else">
+|<TRUE : "true">
+|<FALSE : "false">
+|<WHILE : "while">
+|<SKIP_ : "skip">
+}
+
+TOKEN : //punctuation and symbols
+{
+ <COMMA : ",">
+|<ASSIGNMENT: "=">
+|<DOT : ".">
+|<SEMI_COLON : ";">
+|<COLON : ":">
+|<LEFT_BRACE : "{">
+|<RIGHT_BRACE : "}">
+|<LEFT_BRACKET : "(">
+|<RIGHT_BRACKET : ")">
+|<PLUS : "+">
+|<MINUS : "-">
+|<NOT : "~">
+|<OR : "||">
+|<AND : "&&">
+|<EQUALTO : "==">
+|<NOT_EQUAL : "!=">
+|<LESS_THAN : "<">
+|<GREATER_THAN : ">">
+|<LTHAN_EQUALTO : "<=">
+|<GTHAN_EQUALTO : ">=">
+}
+
+TOKEN : //NUMBERS AND ID
+
+{
+  <NUMBER : "0"|(<MINUS>)?["1"-"9"](<DIGIT>)*>
+| <#DIGIT : ["0" - "9"]>
+| <ID: <LETTER>(<LETTER>|<DIGIT>|"_")*>
+| <#LETTER : ["a" - "z", "A" - "Z"]>
+}
+
+TOKEN : // Anything not recognised so far
+{
+<OTHER : ~[]>
+}
+
+/* S4 - THE GRAMMAR */
+
+SimpleNode program() #program : {}{
+  decl_list() function_list() main() <EOF> {return jjtThis;}
+}
+
+void decl_list(): {}{
+  (decl() <SEMI_COLON> decl_list())?
+
+}
+
+void decl(): {}{
+
+  var_decl() | const_decl()
+}
+
+void var_decl()#vardec: {Token t; String id; String type;}{
+  t = <VAR> id = ID() <COLON> type = type() {jjtThis.value = t.image; ST.insert(id, type, "variable", scope);}
+}
+
+void const_decl()#constdec:  { Token t;String id; String type;}{
+  t = <CONST> id = ID() <COLON> type = type() <ASSIGNMENT> expression(){jjtThis.value = t.image;ST.insert(id, type, "constant", scope);}
+}
+
+void function_list(): {}{
+  (function() function_list())?
+}
+
+void binary_arith_op() : {Token t;}{
+  t = <PLUS>{jjtThis.value = t.image;} #plus
+  | t = <MINUS> {jjtThis.value = t.image;}#minus
+}
+
+
+String type() #type: {Token t;} {
+  t = <INT> {jjtThis.value = t.image;return t.image;}
+  |t =  <BOOL> {jjtThis.value = t.image; return t.image;}
+  | t = <VOID>{jjtThis.value = t.image; return t.image;}
+
+}
+
+
+void parameter_list(): {}{
+  (nemp_parameter_list())?
+}
+
+void main() #main:{}{{scope = "main";}
+  <MAIN><LEFT_BRACE> decl_list() statement_block() <RIGHT_BRACE>
+}
+
+
+//conflict resolved
+void nemp_arg_list():{} {
+   ID() (<COMMA> nemp_arg_list())?
+
+}
+
+void arg_list()#arglist :{}  {
+  (nemp_arg_list())?
+
+
+}
+
+void comp_op():{Token t;} {
+  t= <EQUALTO> {jjtThis.value = t.image;} #eq_to
+  | t= <NOT_EQUAL> {jjtThis.value = t.image;}#not_eq
+  | t= <LESS_THAN> {jjtThis.value = t.image;}#lessthan
+  | t= <LTHAN_EQUALTO> {jjtThis.value = t.image;}#lessthan_equal
+  | t= <GREATER_THAN> {jjtThis.value = t.image;}#greaterthan
+  | t= <GTHAN_EQUALTO>{jjtThis.value = t.image; }#greaterthan_equal
+
+}
+
+
+//created condp() to deal with left recursion
+void condition() #condition :{}{
+  <NOT> condition()
+  | <LEFT_BRACKET> condition() <RIGHT_BRACKET> condp()
+  | fragment() comp_op() expression() condp()
+}
+//chnaged
+void condp() : {Token t;}{
+  ((t = <AND>{jjtThis.value = t.image;}#and_con
+  | t = <OR>{jjtThis.value = t.image;}#or_con) condition())?
+}
+
+
+void fragment()#fragment: {Token t;} {
+  <MINUS> ID() #minus
+  | t = <ID> (<LEFT_BRACKET> arg_list() <RIGHT_BRACKET>#ret)?  {jjtThis.value = t.image;}
+  | t = <NUMBER> #num{jjtThis.value = t.image;}
+  | t = <TRUE> #bool_true{jjtThis.value = t.image;}
+  | t= <FALSE>#boo_false{jjtThis.value = t.image;}
+}
+
+//created to resolve conflict
+void pr(): {} {
+  (binary_arith_op() fragment() pr())?
+}
+
+//conflict resolved wiht pr func
+void expression():{}{
+  fragment() pr() | <LEFT_BRACKET> expression() <RIGHT_BRACKET> pr()
+}
+
+//conflict resolved-----------
+void statement() #statement:{Token t;}{
+<LEFT_BRACE>statement_block() <RIGHT_BRACE>
+|ID() choiceForStatement()
+|t = <IF> condition() <LEFT_BRACE>statement_block()<RIGHT_BRACE> <ELSE> <LEFT_BRACE>statement_block()<RIGHT_BRACE>{jjtThis.value = t.image;}
+|t = <WHILE> condition() <LEFT_BRACE> statement_block() <RIGHT_BRACE>{jjtThis.value = t.image;}
+| <SKIP_> <SEMI_COLON>
+
+}
+//created to remove the choice from statement and decorate
+void choiceForStatement():{Token t;}{
+  t= <LEFT_BRACKET> arg_list() <RIGHT_BRACKET> <SEMI_COLON>  {jjtThis.value = t.image;} #arg
+  |t= <ASSIGNMENT> expression() <SEMI_COLON>  {jjtThis.value = t.image;} #assignment1
+  |{}
+}
+
+void statement_block(): {}{
+  (statement() statement_block())?
+
+}
+
+
+//conflic resolved
+void nemp_parameter_list() #N_parameterlist : {String id; String type;} {
+  id = ID() <COLON> type = type() (<COMMA> nemp_parameter_list())? {ST.insert(id, type, "parameter", scope);}
+
+}
+
+String ID()#identifier:{Token t;}{
+
+  t = <ID>{jjtThis.value = t.image; return t.image;}
+}
+
+
+
+void function() #function :{String id; String type;}{
+  type=type() id=ID() <LEFT_BRACKET> parameter_list() <RIGHT_BRACKET> {ST.insert(id, type, "function", scope);scope=id;}
+  <LEFT_BRACE>
+  decl_list() statement_block()
+  <RET> <LEFT_BRACKET> (expression())? <RIGHT_BRACKET> <SEMI_COLON>
+  <RIGHT_BRACE>
+  {scope = "global";}
+
+}
